@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: tw-stock-alpha-radar-v2-1
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.address 0.0.0.0 --server.port $PORT --server.headless true
+    plan: free
