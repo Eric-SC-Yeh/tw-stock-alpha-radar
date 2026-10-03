@@ -1,0 +1,56 @@
+export type Stock = {
+  code: string;
+  name: string;
+  market: string;
+  date: string;
+  close: number | null;
+  trade_value: number | null;
+  total_score: number;
+  grade: string;
+  breakout_score: number;
+  trend_score: number;
+  momentum_score: number;
+  volume_score: number;
+  institutional_score: number;
+  breakout_score_component: number;
+  market_score_component: number;
+  risk_score: number;
+  risk_reasons: string;
+  ma20_bias: number | null;
+  rsi14: number | null;
+  vol_ratio: number | null;
+  atr14: number | null;
+  atr_pct: number | null;
+  ma20: number | null;
+  stop_loss: number | null;
+  trail_trigger: number | null;
+  trade_type: string;
+  break20: boolean;
+  break60: boolean;
+  foreign_net: number | null;
+  trust_net: number | null;
+  dealer_net: number | null;
+  source_latest: string;
+  inst_source: string;
+};
+
+export type Snapshot = {
+  schema_version: number;
+  status: "ready" | "partial" | "pending";
+  generated_at: string | null;
+  trading_date: string | null;
+  coverage: string[];
+  config: {
+    min_trade_value: number;
+    max_ma20_bias: number;
+    warn_ma20_bias: number;
+    top_liquid_per_market: number;
+  };
+  market: {
+    regime: string;
+    market_score: number;
+    source_market: string;
+  };
+  errors: string[];
+  stocks: Stock[];
+};

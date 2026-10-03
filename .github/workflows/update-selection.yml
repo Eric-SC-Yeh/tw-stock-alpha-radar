@@ -1,0 +1,43 @@
+name: 更新台股選股快照
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 臺灣時間週一至週五 18:43；GitHub 排程可能延遲。
+    - cron: "43 10 * * 1-5"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-selection
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-data.txt
+      - name: 安裝資料處理套件
+        run: python -m pip install -r requirements-data.txt
+      - name: 產生真實資料快照
+        run: python scripts/build_snapshot.py
+      - name: 發布快照
+        run: |
+          if git diff --quiet -- data/latest-selection.json; then
+            echo "快照未變更"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/latest-selection.json
+          git commit -m "Update stock selection snapshot"
+          git push
