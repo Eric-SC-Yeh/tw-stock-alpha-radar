@@ -45,11 +45,7 @@ def main() -> int:
     frame, market, errors = build_screen(config)
     if frame.empty or len(frame) < 10:
         raise RuntimeError(f"選股結果不足，保留舊快照。資料來源訊息：{errors}")
-    coverage = sorted(set(frame["market"]))
-    full_coverage = {"TWSE", "TPEx"}.issubset(coverage)
     previous = json.loads(OUTPUT.read_text(encoding="utf-8")) if OUTPUT.exists() else {}
-    if not full_coverage and previous.get("status") == "ready":
-        raise RuntimeError(f"上市或上櫃資料缺漏，保留既有完整快照。資料來源訊息：{errors}")
     dates = pd.to_datetime(frame["date"], errors="coerce").dropna()
     if dates.empty:
         raise RuntimeError("找不到有效交易日期，保留舊快照。")
@@ -57,6 +53,10 @@ def main() -> int:
     frame = frame[frame["date"] == latest_date].copy()
     if len(frame) < 10:
         raise RuntimeError("最新交易日的股票不足 10 檔，保留舊快照。")
+    coverage = sorted(set(frame["market"]))
+    full_coverage = {"TWSE", "TPEx"}.issubset(coverage)
+    if not full_coverage and previous.get("status") == "ready":
+        raise RuntimeError(f"最新交易日上市或上櫃資料缺漏，保留既有完整快照。資料來源訊息：{errors}")
 
     missing = sorted(set(FIELDS) - set(frame.columns))
     if missing:

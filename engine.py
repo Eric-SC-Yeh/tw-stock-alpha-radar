@@ -57,9 +57,16 @@ def roc_to_iso(s: str) -> str:
 
 
 def get_json(url: str, params=None, timeout=20):
-    r = requests.get(url, params=params, headers=UA, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    for attempt in range(4):
+        try:
+            r = requests.get(url, params=params, headers=UA, timeout=timeout)
+            r.raise_for_status()
+            return r.json()
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as exc:
+            status = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
+            if attempt == 3 or (status is not None and status not in {429, 500, 502, 503, 504, 520}):
+                raise
+            time.sleep(2 ** attempt)
 
 
 def fetch_twse_snapshot() -> pd.DataFrame:
@@ -248,8 +255,14 @@ def download_history(tickers: List[str], period="9mo") -> Dict[str, pd.DataFrame
 def _normalize_hist(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
     if isinstance(d.columns, pd.MultiIndex):
-        d.columns = d.columns.get_level_values(-1)
+        level = next((i for i in range(d.columns.nlevels)
+                      if "Close" in set(d.columns.get_level_values(i))), None)
+        if level is None:
+            return pd.DataFrame()
+        d.columns = d.columns.get_level_values(level)
     d.columns = [str(c).title() for c in d.columns]
+    if "Close" not in d.columns:
+        return pd.DataFrame()
     keep = [c for c in ["Open", "High", "Low", "Close", "Adj Close", "Volume"] if c in d.columns]
     d = d[keep].dropna(subset=["Close"])
     d.index = pd.to_datetime(d.index).tz_localize(None)
