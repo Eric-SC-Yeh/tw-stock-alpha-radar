@@ -1,4 +1,4 @@
-"""以 V2.1 原始選股引擎建立 V2.2 的真實資料快照。"""
+"""以原始選股引擎建立日期可追溯的 V2.3 盤後快照。"""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ FIELDS = [
     "risk_score", "risk_reasons", "ma20_bias", "rsi14", "vol_ratio", "atr14",
     "atr_pct", "ma20", "stop_loss", "trail_trigger", "trade_type", "break20",
     "break60", "foreign_net", "trust_net", "dealer_net", "source_latest",
-    "inst_source",
+    "inst_source", "inst_date", "history_date",
 ]
 
 
@@ -63,8 +63,8 @@ def main() -> int:
         raise RuntimeError(f"選股引擎缺少欄位：{', '.join(missing)}")
     stocks = [{field: clean(row[field]) for field in FIELDS} for row in frame.to_dict("records")]
     content = {
-        "schema_version": 1,
-        "status": "ready" if full_coverage else "partial",
+        "schema_version": 2,
+        "status": "ready" if full_coverage and not errors else "partial",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "trading_date": latest_date,
         "coverage": coverage,
@@ -78,6 +78,7 @@ def main() -> int:
             "regime": market.get("regime", "Unknown"),
             "market_score": market.get("market_score", 0),
             "source_market": market.get("source_market", "Unknown"),
+            "history_date": market.get("history_date"),
         },
         "errors": errors,
         "stocks": stocks,

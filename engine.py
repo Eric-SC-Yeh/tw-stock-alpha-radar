@@ -48,12 +48,21 @@ def _int(x, default=0):
 
 
 def roc_to_iso(s: str) -> str:
-    s = str(s).strip().replace("/", "")
+    s = str(s).strip().replace("/", "").replace("-", "").replace("年", "").replace("月", "").replace("日", "")
     if len(s) == 7 and s.isdigit():
         return f"{int(s[:3])+1911:04d}-{s[3:5]}-{s[5:7]}"
     if len(s) == 8 and s.isdigit():
         return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
     return str(s)
+
+
+def valid_date(value: object) -> Optional[str]:
+    """只接受來源明確提供的有效交易日期。"""
+    try:
+        parsed = roc_to_iso(str(value))
+        return datetime.strptime(parsed, "%Y-%m-%d").date().isoformat()
+    except (TypeError, ValueError):
+        return None
 
 
 def get_json(url: str, params=None, timeout=20):
@@ -62,7 +71,7 @@ def get_json(url: str, params=None, timeout=20):
             r = requests.get(url, params=params, headers=UA, timeout=timeout)
             r.raise_for_status()
             return r.json()
-        except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as exc:
+        except (requests.ConnectionError, requests.Timeout, requests.HTTPError, requests.exceptions.ChunkedEncodingError) as exc:
             status = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
             if attempt == 3 or (status is not None and status not in {429, 500, 502, 503, 504, 520}):
                 raise
@@ -149,6 +158,9 @@ def fetch_market_snapshot() -> Tuple[pd.DataFrame, List[str]]:
 def fetch_twse_institutional(date_yyyymmdd: str) -> pd.DataFrame:
     try:
         data = get_json(TWSE_T86, params={"date": date_yyyymmdd, "selectType": "ALL", "response": "json"})
+        source_date = valid_date(data.get("date", ""))
+        if source_date != valid_date(date_yyyymmdd):
+            return pd.DataFrame()
         fields = data.get("fields", [])
         rows = data.get("data", [])
         if not fields or not rows:
@@ -165,11 +177,15 @@ def fetch_twse_institutional(date_yyyymmdd: str) -> pd.DataFrame:
         fnet = findcol(["外陸資買賣超"])
         inet = findcol(["投信買賣超"])
         dnet = findcol(["自營商買賣超"])
+        if not all([fnet, inet, dnet]):
+            return pd.DataFrame()
         out = pd.DataFrame({"code": df[code_col].astype(str).str.strip()})
-        out["foreign_net"] = df[fnet].map(_num) if fnet else 0
-        out["trust_net"] = df[inet].map(_num) if inet else 0
-        out["dealer_net"] = df[dnet].map(_num) if dnet else 0
+        out["foreign_net"] = df[fnet].map(_num)
+        out["trust_net"] = df[inet].map(_num)
+        out["dealer_net"] = df[dnet].map(_num)
+        out = out.dropna(subset=["foreign_net", "trust_net", "dealer_net"])
         out["inst_source"] = "TWSE T86"
+        out["inst_date"] = source_date
         return out
     except Exception:
         return pd.DataFrame()
@@ -180,21 +196,33 @@ def fetch_tpex_institutional() -> pd.DataFrame:
         rows = get_json(TPEX_INST)
         if not isinstance(rows, list) or not rows:
             return pd.DataFrame()
-        def pick(d, aliases, default=0):
+        def pick(d, aliases, default=None):
             for a in aliases:
                 if a in d:
                     return d[a]
             return default
+        def net(d, aliases, marker):
+            value = pick(d, aliases)
+            if value is None:
+                matches = [v for k, v in d.items() if marker(k) and ("Difference" in k or "NetBuySell" in k)]
+                value = matches[0] if len(matches) == 1 else None
+            return _num(value)
         out = []
         for r in rows:
             code = str(pick(r, ["SecuritiesCompanyCode", "Code", "SecuritiesCode"], "")).strip()
             if not re.fullmatch(r"\d{4}", code):
                 continue
+            foreign = net(r, ["ForeignInvestorsDifference", "ForeignInvestorsNetBuySell", "ForeignNet"], lambda k: "Foreign" in k and "Dealer" not in k)
+            trust = net(r, ["InvestmentTrustDifference", "InvestmentTrustNetBuySell", "InvestmentTrustNet"], lambda k: "Trust" in k)
+            dealer = net(r, ["DealerDifference", "DealerNetBuySell", "DealerNet"], lambda k: "Dealer" in k and "Foreign" not in k)
+            if any(pd.isna(v) for v in [foreign, trust, dealer]):
+                continue
             out.append({
                 "code": code,
-                "foreign_net": _num(pick(r, ["ForeignInvestorsDifference", "ForeignInvestorsNetBuySell", "ForeignNet"], 0), 0),
-                "trust_net": _num(pick(r, ["InvestmentTrustDifference", "InvestmentTrustNetBuySell", "InvestmentTrustNet"], 0), 0),
-                "dealer_net": _num(pick(r, ["DealerDifference", "DealerNetBuySell", "DealerNet"], 0), 0),
+                "inst_date": valid_date(pick(r, ["Date", "date", "TradingDate"], "")),
+                "foreign_net": foreign,
+                "trust_net": trust,
+                "dealer_net": dealer,
                 "inst_source": "TPEx OpenAPI",
             })
         return pd.DataFrame(out)
@@ -205,10 +233,12 @@ def fetch_tpex_institutional() -> pd.DataFrame:
 def enrich_institutional(snapshot: pd.DataFrame) -> pd.DataFrame:
     if snapshot.empty:
         return snapshot
-    latest_date = pd.to_datetime(snapshot["date"], errors="coerce").max()
-    date_str = latest_date.strftime("%Y%m%d") if pd.notna(latest_date) else datetime.now().strftime("%Y%m%d")
-    tw = fetch_twse_institutional(date_str)
+    latest_date = valid_date(snapshot["date"].iloc[0])
+    date_str = latest_date.replace("-", "") if latest_date else ""
+    tw = fetch_twse_institutional(date_str) if date_str else pd.DataFrame()
     tp = fetch_tpex_institutional()
+    if not tp.empty:
+        tp = tp[tp["inst_date"] == latest_date].copy()
     inst = pd.concat([x for x in [tw, tp] if not x.empty], ignore_index=True) if (not tw.empty or not tp.empty) else pd.DataFrame()
     out = snapshot.copy()
     if inst.empty:
@@ -216,11 +246,13 @@ def enrich_institutional(snapshot: pd.DataFrame) -> pd.DataFrame:
         out["trust_net"] = 0.0
         out["dealer_net"] = 0.0
         out["inst_source"] = "Unavailable"
+        out["inst_date"] = None
         return out
     out = out.merge(inst, on="code", how="left")
     for c in ["foreign_net", "trust_net", "dealer_net"]:
         out[c] = out[c].fillna(0)
     out["inst_source"] = out["inst_source"].fillna("Unavailable")
+    out["inst_date"] = out["inst_date"].where(out["inst_source"] != "Unavailable", None)
     return out
 
 
@@ -274,7 +306,9 @@ def rsi(close: pd.Series, n=14) -> pd.Series:
     gain = delta.clip(lower=0).rolling(n).mean()
     loss = -delta.clip(upper=0).rolling(n).mean()
     rs = gain / loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+    result = 100 - (100 / (1 + rs))
+    result = result.mask((loss == 0) & (gain > 0), 100)
+    return result.mask((loss == 0) & (gain == 0), 50)
 
 
 def atr(df: pd.DataFrame, n=14) -> pd.Series:
@@ -320,6 +354,7 @@ def calc_indicators(df: pd.DataFrame) -> Optional[Dict[str, float]]:
     vol_ratio = x["Volume"] / x["VOL20"] if pd.notna(x["VOL20"]) and x["VOL20"] > 0 else np.nan
     atr_pct = x["ATR14"] / c.iloc[-1] * 100 if pd.notna(x["ATR14"]) and c.iloc[-1] else np.nan
     return {
+        "history_date": d.index[-1].date().isoformat(),
         "hist_close": float(c.iloc[-1]),
         "ma5": float(x["MA5"]) if pd.notna(x["MA5"]) else np.nan,
         "ma20": float(x["MA20"]) if pd.notna(x["MA20"]) else np.nan,
@@ -457,6 +492,17 @@ def build_screen(config: Config = Config()) -> Tuple[pd.DataFrame, Dict[str, obj
     if snapshot.empty:
         return snapshot, market_regime(), errors
 
+    snapshot = snapshot.copy()
+    snapshot["date"] = snapshot["date"].map(valid_date)
+    snapshot = snapshot[snapshot["date"].notna()]
+    if snapshot.empty:
+        return snapshot, market_regime(), errors + ["官方行情缺少有效日期"]
+    latest_date = snapshot["date"].max()
+    stale_markets = sorted(set(snapshot.loc[snapshot["date"] != latest_date, "market"]))
+    if stale_markets:
+        errors.append(f"{'、'.join(stale_markets)} 行情日期較舊，未納入 {latest_date} 排名")
+    snapshot = snapshot[snapshot["date"] == latest_date].copy()
+
     snapshot = enrich_institutional(snapshot)
     # liquid common stocks only; perform technical download only on the liquid subset
     liquid = snapshot[snapshot["trade_value"].fillna(0) >= config.min_trade_value].copy()
@@ -469,23 +515,39 @@ def build_screen(config: Config = Config()) -> Tuple[pd.DataFrame, Dict[str, obj
 
     hist = download_history(liquid["ticker"].tolist(), period="9mo")
     ind_rows = []
+    stale_history = 0
     for _, r in liquid.iterrows():
         ind = calc_indicators(hist.get(r.ticker))
         if ind is None:
             continue
+        if ind["history_date"] != r["date"]:
+            stale_history += 1
+            continue
         ind_rows.append({"ticker": r.ticker, **ind})
+    if stale_history:
+        errors.append(f"{stale_history} 檔 Yahoo 技術歷史日期與官方行情不一致，已排除")
     inds = pd.DataFrame(ind_rows)
     if inds.empty:
         errors.append("歷史行情下載不足，無法計算技術指標")
         return pd.DataFrame(), market_regime(), errors
 
     df = liquid.merge(inds, on="ticker", how="inner")
-    # use official latest close as source of truth; history-derived indicators remain from Yahoo
-    df["close"] = df["close"].fillna(df["hist_close"])
+    # 價格口徑明顯不同時，不將官方收盤價與 Yahoo 指標混算。
+    gap = (df["hist_close"] / df["close"] - 1).abs()
+    mismatched = gap.gt(0.02) | df["close"].isna() | df["close"].le(0)
+    if mismatched.any():
+        errors.append(f"{int(mismatched.sum())} 檔官方與 Yahoo 收盤價差超過 2% 或價格缺漏，已排除")
+        df = df[~mismatched].copy()
     df = df[df["ma20_bias"].notna()].copy()
     df["excluded_overheat"] = df["ma20_bias"] > config.max_ma20_bias
 
     market = market_regime()
+    if market.get("history_date") != latest_date:
+        errors.append("大盤指標日期與官方行情不一致，市場模式暫不採用")
+        market = {"regime": "Unknown", "market_score": 0, "source_market": market.get("source_market", "Unavailable"), "history_date": market.get("history_date")}
+    missing_inst = int((df["inst_source"] == "Unavailable").sum())
+    if missing_inst:
+        errors.append(f"{missing_inst} 檔法人資料缺漏或日期未驗證，籌碼分數按 0 計")
     scored = []
     for _, r in df.iterrows():
         if r.excluded_overheat:

@@ -32,6 +32,8 @@ export type Stock = {
   dealer_net: number | null;
   source_latest: string;
   inst_source: string;
+  inst_date?: string | null;
+  history_date?: string | null;
 };
 
 export type Snapshot = {
@@ -50,6 +52,7 @@ export type Snapshot = {
     regime: string;
     market_score: number;
     source_market: string;
+    history_date?: string | null;
   };
   errors: string[];
   stocks: Stock[];

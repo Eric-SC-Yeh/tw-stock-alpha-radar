@@ -1,11 +1,12 @@
-# TW Stock Alpha Radar V2.2 Vercel
+# TW Stock Alpha Radar V2.3 Vercel
 
-V2.2 使用原版 `engine.py` 計算台股分數。GitHub Actions 在盤後產生 `data/latest-selection.json`，Vercel 將 Next.js 頁面建置成靜態網站。手機開啟時直接取得已完成的快照，不必等待 Streamlit 喚醒與全市場重新計算。
+V2.3 沿用原版評分權重，新增行情、技術歷史、大盤與法人資料的交易日核對。GitHub Actions 在盤後產生 `data/latest-selection.json`，Vercel 將 Next.js 頁面建置成靜態網站。手機開啟時直接取得已發布的快照，不會即時計算。
 
 - 手機頁面：Top 10、飆股、風險、個股、資料與 CSV 匯出。
 - 來源更新：臺灣時間週一至週五 18:43 自動執行，也可在 GitHub Actions 手動啟動。
 - 更新失敗時保留既有快照；若第一次僅取得單一市場，畫面會明示涵蓋範圍。
 - 頁面顯示交易日期與快照產生時間，不把盤後資料稱為即時報價。
+- 日期不一致的技術資料不參與評分；法人日期缺漏時籌碼按 0 分計並標示。舊版快照會顯示尚未核對提示。
 
 部署、資料更新與驗證方式請見 [DEPLOY_VERCEL.md](DEPLOY_VERCEL.md)。
 

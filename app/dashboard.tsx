@@ -106,7 +106,7 @@ export default function Dashboard({ snapshot }: { snapshot: Snapshot }) {
   return (
     <main className="shell">
       <header className="hero">
-        <div className="hero-top"><span className="brand-mark">↗</span><span className="version">V2.2 · VERCEL</span></div>
+        <div className="hero-top"><span className="brand-mark">↗</span><span className="version">V2.3 · VERCEL</span></div>
         <h1>TW Stock<br /><em>Alpha Radar</em></h1>
         <p>台股短線選股雷達 · 每日資料快照</p>
         <div className="hero-footer">
@@ -120,11 +120,12 @@ export default function Dashboard({ snapshot }: { snapshot: Snapshot }) {
           <span className="empty-icon">📭</span>
           <h2>尚未建立選股快照</h2>
           <p>每日資料更新完成後會在這裡顯示真實行情。頁面不會填入示意股票或假分數。</p>
-          <button className="primary-button" onClick={() => window.location.reload()}>重新檢查</button>
+          <button className="primary-button" onClick={() => window.location.reload()}>重新載入頁面</button>
         </section>
       ) : (
         <>
-          {snapshot.status === "partial" && <div className="coverage-alert" role="status">目前僅取得 {snapshot.coverage.join("、")} 資料；另一市場暫時無法讀取，排名尚未涵蓋全台股。資料來源恢復後會自動更新。</div>}
+          {snapshot.schema_version < 2 && <div className="coverage-alert" role="status">此為舊版快照，尚未完成技術指標與法人資料日期核對；請先將分數視為參考。</div>}
+          {snapshot.status === "partial" && <div className="coverage-alert" role="status">資料品質未達完整狀態；目前涵蓋 {snapshot.coverage.join("、")}。請查看「資料」頁的來源提示，勿將排名視為完整市場結果。</div>}
           <section className="summary-grid" aria-label="市場摘要">
             <div className="metric"><span>市場模式</span><strong>{regimeIcon} {regimeLabel}</strong></div>
             <div className="metric"><span>市場分數</span><strong>{snapshot.market.regime === "Unknown" ? "—" : `${snapshot.market.market_score}/100`}</strong></div>
@@ -135,6 +136,7 @@ export default function Dashboard({ snapshot }: { snapshot: Snapshot }) {
           <div className="data-note">
             <span>最新交易日：{snapshot.trading_date}</span>
             <span>更新：{snapshot.generated_at ? fmtTaipeiTime(snapshot.generated_at) : "—"}</span>
+            <span>開啟網頁不會即時抓取行情；平日 18:43 排程產生快照，成功發布後重開頁面即可看到新資料。</span>
           </div>
 
           <nav className="tabbar" aria-label="儀表板頁籤">
@@ -189,6 +191,7 @@ export default function Dashboard({ snapshot }: { snapshot: Snapshot }) {
               <p className="eyebrow">{selected.market} · {selected.code}</p>
               <h3>{selected.name}</h3>
               <p className="detail-explain">{explanation(selected)}</p>
+              <p className="muted">技術資料日：{selected.history_date || "未驗證"}　法人資料日：{selected.inst_date || "未取得／未驗證"}</p>
               <div className="detail-grid">
                 <div><span>綜合評分</span><strong>{fmt(selected.total_score, 0)}/100</strong></div>
                 <div><span>爆發分</span><strong>{fmt(selected.breakout_score, 0)}/100</strong></div>
@@ -213,7 +216,9 @@ export default function Dashboard({ snapshot }: { snapshot: Snapshot }) {
               {top.map((stock) => <tr key={stock.code}><td><strong>{stock.code}</strong><br />{stock.name}</td><td>{fmt(stock.close, 2)}</td><td>{fmt(stock.total_score, 0)}</td><td>{fmt(stock.vol_ratio)}</td></tr>)}
             </tbody></table></div>
             <details className="source-details"><summary>資料來源與限制</summary>
-              <p>最新行情：TWSE 與 TPEx 官方 OpenAPI；技術歷史：Yahoo Finance。法人為當日訊號，尚未建立 5／20 日累計資料。</p>
+              <p>最新行情：TWSE 與 TPEx 官方 OpenAPI；技術歷史與大盤：Yahoo Finance。V2.3 僅採用交易日相符的技術資料，法人日期未驗證或缺漏時籌碼按 0 分計；尚未建立 5／20 日法人累計資料。</p>
+              <p>大盤技術資料日：{snapshot.market.history_date || "未驗證"}。每個股票的來源日期可在「個股」頁查看。</p>
+              <p>本頁為靜態盤後快照，重新整理不會立即重算選股；資料更新取決於排程成功、Git 推送及 Vercel 部署完成。</p>
               <p>固定條件：日成交額至少 {fmt(snapshot.config.min_trade_value / 100_000_000, 0)} 億元、MA20 乖離最多 {fmt(snapshot.config.max_ma20_bias, 0)}%、每市場分析最多 {snapshot.config.top_liquid_per_market} 檔。</p>
               {snapshot.errors.length > 0 && <p>更新時資料來源提示：{snapshot.errors.join("；")}</p>}
             </details>
@@ -221,7 +226,7 @@ export default function Dashboard({ snapshot }: { snapshot: Snapshot }) {
         </>
       )}
 
-      <footer className="footer">V2.2 Vercel · 資料為盤後選股快照，非盤中報價。評分不保證報酬，亦非個人化投資建議。</footer>
+      <footer className="footer">V2.3 Vercel · 資料為盤後選股快照，非盤中報價。評分不保證報酬，亦非個人化投資建議。</footer>
     </main>
   );
 }
