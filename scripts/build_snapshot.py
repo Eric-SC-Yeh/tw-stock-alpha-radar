@@ -55,8 +55,8 @@ def main() -> int:
         raise RuntimeError("最新交易日的股票不足 10 檔，保留舊快照。")
     coverage = sorted(set(frame["market"]))
     full_coverage = {"TWSE", "TPEx"}.issubset(coverage)
-    if not full_coverage and previous.get("status") == "ready":
-        raise RuntimeError(f"最新交易日上市或上櫃資料缺漏，保留既有完整快照。資料來源訊息：{errors}")
+    if not full_coverage:
+        raise RuntimeError(f"最新交易日上市或上櫃資料缺漏，保留既有快照。資料來源訊息：{errors}")
 
     missing = sorted(set(FIELDS) - set(frame.columns))
     if missing:

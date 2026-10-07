@@ -5,6 +5,8 @@ on:
   schedule:
     # 臺灣時間週一至週五 18:43；GitHub 排程可能延遲。
     - cron: "43 10 * * 1-5"
+    # 若盤後來源尚未同步，臺灣時間週二至週六 07:43 再試一次前一交易日資料。
+    - cron: "43 23 * * 1-5"
 
 permissions:
   contents: write

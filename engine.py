@@ -263,23 +263,35 @@ def download_history(tickers: List[str], period="9mo") -> Dict[str, pd.DataFrame
     chunk = 40
     for i in range(0, len(tickers), chunk):
         part = tickers[i:i+chunk]
-        try:
-            raw = yf.download(part, period=period, interval="1d", auto_adjust=False, group_by="ticker", threads=True, progress=False, timeout=30)
-        except Exception:
-            continue
-        if len(part) == 1:
-            t = part[0]
-            df = raw.copy()
-            if not df.empty:
-                result[t] = _normalize_hist(df)
-        else:
-            for t in part:
-                try:
-                    df = raw[t].copy()
-                except Exception:
-                    continue
+        remaining = part
+        for attempt in range(2):
+            if attempt:
+                time.sleep(1)
+            try:
+                # yfinance 的平行下載會共用快取資料庫；在排程環境曾發生 database is locked。
+                raw = yf.download(remaining, period=period, interval="1d", auto_adjust=False, group_by="ticker", threads=False, progress=False, timeout=30)
+            except Exception:
+                continue
+            if len(remaining) == 1:
+                t = remaining[0]
+                df = raw.copy()
                 if not df.empty:
-                    result[t] = _normalize_hist(df)
+                    normalized = _normalize_hist(df)
+                    if not normalized.empty:
+                        result[t] = normalized
+            else:
+                for t in remaining:
+                    try:
+                        df = raw[t].copy()
+                    except Exception:
+                        continue
+                    if not df.empty:
+                        normalized = _normalize_hist(df)
+                        if not normalized.empty:
+                            result[t] = normalized
+            remaining = [t for t in part if t not in result]
+            if not remaining:
+                break
         time.sleep(0.25)
     return result
 
@@ -375,10 +387,12 @@ def calc_indicators(df: pd.DataFrame) -> Optional[Dict[str, float]]:
     }
 
 
-def market_regime() -> Dict[str, object]:
+def market_regime(as_of_date: Optional[str] = None) -> Dict[str, object]:
     try:
         df = yf.download("^TWII", period="9mo", interval="1d", progress=False, auto_adjust=False, timeout=20)
         df = _normalize_hist(df)
+        if as_of_date:
+            df = df.loc[df.index <= pd.Timestamp(as_of_date)]
         if len(df) < 65:
             raise ValueError("TAIEX history insufficient")
         ind = calc_indicators(df)
@@ -517,7 +531,11 @@ def build_screen(config: Config = Config()) -> Tuple[pd.DataFrame, Dict[str, obj
     ind_rows = []
     stale_history = 0
     for _, r in liquid.iterrows():
-        ind = calc_indicators(hist.get(r.ticker))
+        history = hist.get(r.ticker)
+        if history is not None and not history.empty:
+            # Yahoo 盤中已有下一交易日資料時，只用官方快照當日及之前的歷史。
+            history = history.loc[history.index <= pd.Timestamp(r["date"])]
+        ind = calc_indicators(history)
         if ind is None:
             continue
         if ind["history_date"] != r["date"]:
@@ -541,7 +559,7 @@ def build_screen(config: Config = Config()) -> Tuple[pd.DataFrame, Dict[str, obj
     df = df[df["ma20_bias"].notna()].copy()
     df["excluded_overheat"] = df["ma20_bias"] > config.max_ma20_bias
 
-    market = market_regime()
+    market = market_regime(latest_date)
     if market.get("history_date") != latest_date:
         errors.append("大盤指標日期與官方行情不一致，市場模式暫不採用")
         market = {"regime": "Unknown", "market_score": 0, "source_market": market.get("source_market", "Unavailable"), "history_date": market.get("history_date")}

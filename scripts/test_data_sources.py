@@ -92,13 +92,14 @@ class DataSourceTests(unittest.TestCase):
         self.assertEqual(up, 100)
         self.assertEqual(flat, 50)
 
-    def test_same_day_history_produces_a_ranked_stock(self):
+    def test_future_yahoo_row_is_excluded_from_official_day_scoring(self):
         dates = pd.bdate_range(end="2026-10-02", periods=130)
         closes = pd.Series([100 + i * 0.2 for i in range(130)], index=dates)
         history = pd.DataFrame({
             "Open": closes - 0.2, "High": closes + 0.5,
             "Low": closes - 0.5, "Close": closes, "Volume": 2_000_000,
         })
+        history.loc[pd.Timestamp("2026-10-05")] = [200, 201, 199, 200, 2_000_000]
         quotes = pd.DataFrame([{
             "date": "2026-10-02", "market": "TWSE", "ticker": "1234.TW",
             "code": "1234", "name": "測試", "close": closes.iloc[-1],
@@ -116,7 +117,19 @@ class DataSourceTests(unittest.TestCase):
         self.assertEqual(frame.iloc[0]["history_date"], "2026-10-02")
         self.assertEqual(errors, [])
 
-    def test_coverage_is_checked_after_latest_date_filter(self):
+    def test_market_regime_uses_official_snapshot_date(self):
+        dates = pd.bdate_range(end="2026-10-05", periods=130)
+        closes = pd.Series([100 + i * 0.2 for i in range(130)], index=dates)
+        history = pd.DataFrame({
+            "Open": closes - 0.2, "High": closes + 0.5,
+            "Low": closes - 0.5, "Close": closes, "Volume": 2_000_000,
+        })
+        with patch.object(engine.yf, "download", return_value=history):
+            result = engine.market_regime("2026-10-02")
+        self.assertEqual(result["history_date"], "2026-10-02")
+        self.assertNotEqual(result["regime"], "Unknown")
+
+    def test_incomplete_latest_date_does_not_replace_snapshot(self):
         rows = []
         for index in range(10):
             row = {field: None for field in build_snapshot.FIELDS}
@@ -127,13 +140,39 @@ class DataSourceTests(unittest.TestCase):
         rows.append(older)
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "selection.json"
+            previous = {"status": "partial", "coverage": ["TWSE", "TPEx"], "trading_date": "2026-10-01"}
+            output.write_text(json.dumps(previous), encoding="utf-8")
             with patch.object(build_snapshot, "OUTPUT", output), \
                  patch.object(build_snapshot, "build_screen", return_value=(pd.DataFrame(rows), {}, [])):
-                self.assertEqual(build_snapshot.main(), 0)
+                with self.assertRaisesRegex(RuntimeError, "上市或上櫃資料缺漏"):
+                    build_snapshot.main()
             result = json.loads(output.read_text(encoding="utf-8"))
-        self.assertEqual(result["status"], "partial")
-        self.assertEqual(result["coverage"], ["TWSE"])
-        self.assertEqual(len(result["stocks"]), 10)
+        self.assertEqual(result, previous)
+
+    def test_history_download_retries_without_parallel_workers(self):
+        dates = pd.to_datetime(["2026-10-01", "2026-10-02"])
+        history = pd.DataFrame({"Close": [100.0, 101.0]}, index=dates)
+        with patch.object(engine.yf, "download", side_effect=[RuntimeError("database is locked"), history]) as download, \
+             patch.object(engine.time, "sleep") as sleep:
+            result = engine.download_history(["1234.TW"])
+        self.assertEqual(download.call_count, 2)
+        self.assertTrue(all(call.kwargs["threads"] is False for call in download.call_args_list))
+        self.assertEqual(result["1234.TW"]["Close"].iloc[-1], 101.0)
+        sleep.assert_any_call(1)
+
+    def test_history_download_retries_tickers_omitted_without_error(self):
+        dates = pd.to_datetime(["2026-10-01", "2026-10-02"])
+        first = pd.DataFrame(
+            [[100.0], [101.0]], index=dates,
+            columns=pd.MultiIndex.from_tuples([("1234.TW", "Close")]),
+        )
+        second = pd.DataFrame({"Close": [50.0, 51.0]}, index=dates)
+        with patch.object(engine.yf, "download", side_effect=[first, second]) as download, \
+             patch.object(engine.time, "sleep"):
+            result = engine.download_history(["1234.TW", "5678.TWO"])
+        self.assertEqual(download.call_count, 2)
+        self.assertEqual(download.call_args_list[1].args[0], ["5678.TWO"])
+        self.assertEqual(set(result), {"1234.TW", "5678.TWO"})
 
 
 if __name__ == "__main__":
