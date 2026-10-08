@@ -48,10 +48,13 @@ macOS：執行 `run_local_mac.command`。
 
 ## 資料來源
 
-- TWSE OpenAPI：上市最新行情。
-- TPEx OpenAPI：上櫃最新行情。
+- TWSE OpenAPI：上市最新行情；若尚未更新，查證交所指定日期的每日收盤報表。
+- TPEx OpenAPI：上櫃最新行情；若尚未更新，查櫃買中心指定日期的上櫃行情報表。兩市場日期必須一致。
 - TWSE / TPEx 三大法人資料。
-- Yahoo Finance：歷史 K 線與技術指標計算。
+- Yahoo Finance：個股歷史 K 線的初始來源；若只缺官方快照當日一筆，使用同日官方開高低收與成交量補齊。
+- FinMind `TaiwanStockPrice`：個股歷史缺口較長或 Yahoo 歷史不足時才查詢；須通過代碼、日期、價格與筆數檢核。
+- TWSE 加權指數歷史資料：大盤技術指標優先來源；官方歷史不足時才退回 Yahoo `^TWII`。
+- 備援資料仍須與上市、上櫃官方快照交易日一致；不合格個股不納入排名，來源顯示於個股頁。
 
 ## 注意
 

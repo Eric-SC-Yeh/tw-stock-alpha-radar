@@ -61,6 +61,42 @@ class DataSourceTests(unittest.TestCase):
             result = engine.fetch_tpex_institutional()
         self.assertIsNone(result.iloc[0]["inst_date"])
 
+    def test_dated_market_report_rejects_wrong_date(self):
+        twse = {"stat": "OK", "date": "20261006", "tables": []}
+        tpex = {"stat": "ok", "date": "20261006", "tables": []}
+        with patch.object(engine, "get_json", return_value=twse):
+            self.assertTrue(engine.fetch_twse_dated_snapshot("2026-10-07").empty)
+        with patch.object(engine, "get_json", return_value=tpex):
+            self.assertTrue(engine.fetch_tpex_dated_snapshot("2026-10-07").empty)
+
+    def test_dated_report_completes_stale_market_without_mixing_dates(self):
+        twse = pd.DataFrame([{"date": "2026-10-07", "market": "TWSE"}])
+        stale_tpex = pd.DataFrame([{"date": "2026-10-06", "market": "TPEx"}])
+        dated_tpex = pd.DataFrame([{"date": "2026-10-07", "market": "TPEx"}])
+        with patch.object(engine, "fetch_twse_snapshot", return_value=twse), \
+             patch.object(engine, "fetch_tpex_snapshot", return_value=stale_tpex), \
+             patch.object(engine, "fetch_tpex_dated_snapshot", return_value=dated_tpex), \
+             patch.object(engine, "_dated_candidates", return_value=[]):
+            frame, errors = engine.fetch_market_snapshot()
+        self.assertEqual(set(frame["date"]), {"2026-10-07"})
+        self.assertEqual(set(frame["market"]), {"TWSE", "TPEx"})
+        self.assertEqual(errors, [])
+
+    def test_newer_dated_reports_replace_both_older_openapi_markets(self):
+        old_twse = pd.DataFrame([{"date": "2026-10-06", "market": "TWSE"}])
+        old_tpex = pd.DataFrame([{"date": "2026-10-06", "market": "TPEx"}])
+        new_twse = pd.DataFrame([{"date": "2026-10-07", "market": "TWSE"}])
+        new_tpex = pd.DataFrame([{"date": "2026-10-07", "market": "TPEx"}])
+        with patch.object(engine, "fetch_twse_snapshot", return_value=old_twse), \
+             patch.object(engine, "fetch_tpex_snapshot", return_value=old_tpex), \
+             patch.object(engine, "fetch_twse_dated_snapshot", return_value=new_twse), \
+             patch.object(engine, "fetch_tpex_dated_snapshot", return_value=new_tpex), \
+             patch.object(engine, "_dated_candidates", return_value=["2026-10-07"]):
+            frame, errors = engine.fetch_market_snapshot()
+        self.assertEqual(set(frame["date"]), {"2026-10-07"})
+        self.assertEqual(set(frame["market"]), {"TWSE", "TPEx"})
+        self.assertEqual(errors, [])
+
     def test_tpex_institutional_does_not_fabricate_missing_components(self):
         rows = [{"SecuritiesCompanyCode": "1234", "Date": "1151002", "ForeignNet": "100"}]
         with patch.object(engine, "get_json", return_value=rows):
@@ -79,6 +115,7 @@ class DataSourceTests(unittest.TestCase):
         with patch.object(engine, "fetch_market_snapshot", return_value=(quotes, [])), \
              patch.object(engine, "enrich_institutional", side_effect=lambda value: value), \
              patch.object(engine, "download_history", return_value={"1234.TW": pd.DataFrame()}), \
+             patch.object(engine, "fetch_finmind_history", return_value=pd.DataFrame()), \
              patch.object(engine, "calc_indicators", return_value={"history_date": "2026-10-01"}), \
              patch.object(engine, "market_regime", return_value={}):
             frame, _, errors = engine.build_screen(engine.Config())
@@ -124,10 +161,80 @@ class DataSourceTests(unittest.TestCase):
             "Open": closes - 0.2, "High": closes + 0.5,
             "Low": closes - 0.5, "Close": closes, "Volume": 2_000_000,
         })
-        with patch.object(engine.yf, "download", return_value=history):
+        with patch.object(engine, "fetch_twse_index_history", return_value=pd.DataFrame()), \
+             patch.object(engine.yf, "download", return_value=history):
             result = engine.market_regime("2026-10-02")
         self.assertEqual(result["history_date"], "2026-10-02")
         self.assertNotEqual(result["regime"], "Unknown")
+
+    def test_official_daily_bar_completes_one_day_yahoo_lag(self):
+        dates = pd.bdate_range(end="2026-10-06", periods=130)
+        history = pd.DataFrame({"Open": 99.0, "High": 102.0, "Low": 98.0,
+                                "Close": 100.0, "Volume": 2000000}, index=dates)
+        quote = pd.Series({"date": "2026-10-07", "ticker": "1234.TW",
+                           "open": 101, "high": 103, "low": 100,
+                           "close": 102, "volume": 3000000, "change": 2})
+        with patch.object(engine, "fetch_finmind_history") as finmind:
+            completed, source = engine.complete_history(history, quote)
+        self.assertEqual(source, "Yahoo Finance + 官方當日行情")
+        self.assertEqual(completed.index[-1], pd.Timestamp("2026-10-07"))
+        self.assertEqual(completed.iloc[-1]["Close"], 102)
+        finmind.assert_not_called()
+
+    def test_long_gap_uses_validated_finmind_history(self):
+        dates = pd.bdate_range(end="2026-10-02", periods=130)
+        history = pd.DataFrame({"Open": 99.0, "High": 102.0, "Low": 98.0,
+                                "Close": 100.0, "Volume": 2000000}, index=dates)
+        backup = history.copy()
+        backup.loc[pd.Timestamp("2026-10-05")] = [99, 102, 98, 100, 2000000]
+        backup.loc[pd.Timestamp("2026-10-06")] = [99, 102, 98, 100, 2000000]
+        backup.loc[pd.Timestamp("2026-10-07")] = [101, 103, 100, 102, 3000000]
+        quote = pd.Series({"date": "2026-10-07", "ticker": "1234.TW",
+                           "open": 101, "high": 103, "low": 100,
+                           "close": 102, "volume": 3000000, "change": 2})
+        with patch.object(engine, "fetch_finmind_history", return_value=backup):
+            completed, source = engine.complete_history(history, quote)
+        self.assertEqual(source, "FinMind TaiwanStockPrice")
+        self.assertEqual(completed.index[-1], pd.Timestamp("2026-10-07"))
+
+    def test_finmind_rejects_wrong_stock_and_invalid_bars(self):
+        payload = {"status": 200, "data": [
+            {"date": "2026-10-07", "stock_id": "5678", "open": 100,
+             "max": 101, "min": 99, "close": 100, "Trading_Volume": 2000000},
+        ]}
+        with patch.object(engine, "get_json", return_value=payload):
+            result = engine.fetch_finmind_history("1234.TW", "2026-10-01", "2026-10-07")
+        self.assertTrue(result.empty)
+
+    def test_official_index_monthly_rows_are_date_checked(self):
+        payload = {"stat": "OK", "fields": ["日期", "開盤指數", "最高指數", "最低指數", "收盤指數"],
+                   "data": [["115/10/07", "20,000", "20,100", "19,900", "20,050"],
+                            ["115/10/08", "20,000", "20,100", "19,900", "20,050"]]}
+        with patch.object(engine, "get_json", return_value=payload):
+            result = engine.fetch_twse_index_history("2026-10-07")
+        self.assertEqual(list(result.index), [pd.Timestamp("2026-10-07")])
+        self.assertEqual(result.iloc[0]["Close"], 20050)
+
+    def test_official_index_is_preferred_over_yahoo(self):
+        dates = pd.bdate_range(end="2026-10-07", periods=130)
+        history = pd.DataFrame({"Open": 100.0, "High": 102.0, "Low": 99.0,
+                                "Close": 101.0, "Volume": float("nan")}, index=dates)
+        with patch.object(engine, "fetch_twse_index_history", return_value=history), \
+             patch.object(engine.yf, "download") as yahoo:
+            result = engine.market_regime("2026-10-07")
+        self.assertEqual(result["source_market"], "TWSE 加權指數歷史資料")
+        yahoo.assert_not_called()
+
+    def test_short_same_day_yahoo_history_uses_finmind(self):
+        history = pd.DataFrame({"Open": [100], "High": [102], "Low": [99],
+                                "Close": [101], "Volume": [2000000]},
+                               index=pd.to_datetime(["2026-10-07"]))
+        quote = pd.Series({"date": "2026-10-07", "ticker": "1234.TW", "close": 101})
+        backup = pd.concat([history] * 65)
+        backup.index = pd.bdate_range(end="2026-10-07", periods=65)
+        with patch.object(engine, "fetch_finmind_history", return_value=backup):
+            _, source = engine.complete_history(history, quote)
+        self.assertEqual(source, "FinMind TaiwanStockPrice")
 
     def test_incomplete_latest_date_does_not_replace_snapshot(self):
         rows = []
@@ -138,7 +245,7 @@ class DataSourceTests(unittest.TestCase):
         older = {field: None for field in build_snapshot.FIELDS}
         older.update(date="2026-10-01", code="1234", market="TPEx")
         rows.append(older)
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as temp_dir:
             output = Path(temp_dir) / "selection.json"
             previous = {"status": "partial", "coverage": ["TWSE", "TPEx"], "trading_date": "2026-10-01"}
             output.write_text(json.dumps(previous), encoding="utf-8")

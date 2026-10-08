@@ -24,7 +24,7 @@ FIELDS = [
     "risk_score", "risk_reasons", "ma20_bias", "rsi14", "vol_ratio", "atr14",
     "atr_pct", "ma20", "stop_loss", "trail_trigger", "trade_type", "break20",
     "break60", "foreign_net", "trust_net", "dealer_net", "source_latest",
-    "inst_source", "inst_date", "history_date",
+    "inst_source", "inst_date", "history_date", "source_history",
 ]
 
 

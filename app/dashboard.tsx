@@ -191,7 +191,7 @@ export default function Dashboard({ snapshot }: { snapshot: Snapshot }) {
               <p className="eyebrow">{selected.market} · {selected.code}</p>
               <h3>{selected.name}</h3>
               <p className="detail-explain">{explanation(selected)}</p>
-              <p className="muted">技術資料日：{selected.history_date || "未驗證"}　法人資料日：{selected.inst_date || "未取得／未驗證"}</p>
+              <p className="muted">技術資料日：{selected.history_date || "未驗證"}　技術來源：{selected.source_history || "未記錄"}　法人資料日：{selected.inst_date || "未取得／未驗證"}</p>
               <div className="detail-grid">
                 <div><span>綜合評分</span><strong>{fmt(selected.total_score, 0)}/100</strong></div>
                 <div><span>爆發分</span><strong>{fmt(selected.breakout_score, 0)}/100</strong></div>

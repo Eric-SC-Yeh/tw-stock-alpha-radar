@@ -34,6 +34,7 @@ export type Stock = {
   inst_source: string;
   inst_date?: string | null;
   history_date?: string | null;
+  source_history?: string | null;
 };
 
 export type Snapshot = {
